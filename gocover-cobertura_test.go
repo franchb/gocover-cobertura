@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/xml"
 	"io"
-	"io/ioutil"
+
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,12 +18,12 @@ import (
 var SaveTestResults = false
 
 func Test_Main(t *testing.T) {
-	fname := filepath.Join(os.TempDir(), "stdout")
+	fname := filepath.Join(t.TempDir(), "stdout")
 	temp, err := os.Create(fname)
 	require.NoError(t, err)
 	os.Stdout = temp
 	main()
-	outputBytes, err := ioutil.ReadFile(fname)
+	outputBytes, err := os.ReadFile(fname)
 	require.NoError(t, err)
 
 	outputString := string(outputBytes)
@@ -121,10 +121,11 @@ func TestParseProfilePermissionDenied(t *testing.T) {
 		t.Skip("chmod is not supported by Windows")
 	}
 
-	tempFile, err := ioutil.TempFile("", "not-readable")
+	tempFile, err := os.CreateTemp(t.TempDir(), "not-readable")
 	require.NoError(t, err)
 
-	defer func() { err := os.Remove(tempFile.Name()); require.NoError(t, err) }()
+	t.Cleanup(func() { err := os.Remove(tempFile.Name()); require.NoError(t, err) })
+
 	err = tempFile.Chmod(000)
 	require.NoError(t, err)
 	v := Coverage{}

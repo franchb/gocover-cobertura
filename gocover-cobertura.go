@@ -33,6 +33,8 @@ func main() {
 	flag.BoolVar(&ignore.GeneratedFiles, "ignore-gen-files", false, "ignore generated files")
 	ignoreDirsRe := flag.String("ignore-dirs", "", "ignore dirs matching this regexp")
 	ignoreFilesRe := flag.String("ignore-files", "", "ignore files matching this regexp")
+	fromFile := flag.String("from", "", "load coverage from file, for example coverage.out")
+	toFile := flag.String("to", "", "write XML result to file")
 
 	flag.Parse()
 
@@ -51,7 +53,27 @@ func main() {
 		}
 	}
 
-	if err := convert(os.Stdin, os.Stdout, &ignore); err != nil {
+	from := os.Stdin
+	to := os.Stdout
+
+	if fromFile != nil && *fromFile != "" {
+		from, err := os.Open(*fromFile)
+		if err != nil {
+			fatal("Could not open file %s: %s\n", *fromFile, err)
+		}
+		defer from.Close()
+	}
+
+	if toFile != nil && *toFile != "" {
+		to, err = os.Open(*toFile)
+		if err != nil {
+			fatal("Could not open file %s: %s\n", *toFile, err)
+		}
+		defer to.Close()
+
+	}
+
+	if err := convert(from, to, &ignore); err != nil {
 		fatal("code coverage conversion failed: %s", err)
 	}
 }
