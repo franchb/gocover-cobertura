@@ -65,7 +65,7 @@ func main() {
 	}
 
 	if toFile != nil && *toFile != "" {
-		to, err = os.Open(*toFile)
+		to, err = os.Create(*toFile)
 		if err != nil {
 			fatal("Could not open file %s: %s\n", *toFile, err)
 		}
