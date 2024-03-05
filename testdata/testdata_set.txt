@@ -1,9 +1,13 @@
 mode: set
-github.com/boumenot/gocover-cobertura/testdata/func1.go:4.23,5.16 1 1
-github.com/boumenot/gocover-cobertura/testdata/func1.go:5.16,7.3 1 0
-github.com/boumenot/gocover-cobertura/testdata/func2.go:7.34,8.16 1 1
-github.com/boumenot/gocover-cobertura/testdata/func2.go:8.16,10.3 1 1
-github.com/boumenot/gocover-cobertura/testdata/func2.go:13.35,14.2 0 0
-github.com/boumenot/gocover-cobertura/testdata/func2.go:16.35,17.2 0 0
-github.com/boumenot/gocover-cobertura/testdata/func3.go:6.35,17.2 0 0
-github.com/boumenot/gocover-cobertura/testdata/func4.go:6.35,17.2 0 0
+github.com/franchb/gocover-cobertura/testdata/func1.go:5.23,6.16 1 1
+github.com/franchb/gocover-cobertura/testdata/func1.go:6.16,8.3 1 0
+github.com/franchb/gocover-cobertura/testdata/func2.go:8.34,9.16 1 1
+github.com/franchb/gocover-cobertura/testdata/func2.go:9.16,11.3 1 1
+github.com/franchb/gocover-cobertura/testdata/func2.go:14.36,15.2 0 0
+github.com/franchb/gocover-cobertura/testdata/func2.go:17.36,18.2 0 0
+github.com/franchb/gocover-cobertura/testdata/func3.go:6.23,7.16 1 0
+github.com/franchb/gocover-cobertura/testdata/func3.go:7.16,9.3 1 0
+github.com/franchb/gocover-cobertura/testdata/func4.go:5.23,6.16 1 0
+github.com/franchb/gocover-cobertura/testdata/func4.go:6.16,8.3 1 0
+github.com/franchb/gocover-cobertura/testdata/func5.go:7.23,8.16 1 0
+github.com/franchb/gocover-cobertura/testdata/func5.go:8.16,10.3 1 0

@@ -17,16 +17,22 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-const coberturaDTDDecl = `<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-04.dtd">`
+const DTDDecl = `<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-04.dtd">`
 
 var byFiles bool
 
-func fatal(format string, a ...interface{}) {
-	_, _ = fmt.Fprintf(os.Stderr, format, a...)
+func fatal(err error) {
+	_, _ = os.Stderr.WriteString(err.Error() + "\n")
 	os.Exit(1)
 }
 
 func main() {
+	if err := Run(); err != nil {
+		fatal(err)
+	}
+}
+
+func Run() error {
 	var ignore Ignore
 
 	flag.BoolVar(&byFiles, "by-files", false, "code coverage by file, not class")
@@ -35,6 +41,7 @@ func main() {
 	ignoreFilesRe := flag.String("ignore-files", "", "ignore files matching this regexp")
 	fromFile := flag.String("from", "", "load coverage from file, for example coverage.out")
 	toFile := flag.String("to", "", "write XML result to file")
+	tags := flag.String("tags", "", "Go build tags")
 
 	flag.Parse()
 
@@ -42,14 +49,14 @@ func main() {
 	if *ignoreDirsRe != "" {
 		ignore.Dirs, err = regexp.Compile(*ignoreDirsRe)
 		if err != nil {
-			fatal("Bad -ignore-dirs regexp: %s\n", err)
+			return fmt.Errorf("bad '-ignore-dirs' regexp: %w", err)
 		}
 	}
 
 	if *ignoreFilesRe != "" {
 		ignore.Files, err = regexp.Compile(*ignoreFilesRe)
 		if err != nil {
-			fatal("Bad -ignore-files regexp: %s\n", err)
+			return fmt.Errorf("bad '-ignore-files' regexp: %w", err)
 		}
 	}
 
@@ -57,9 +64,9 @@ func main() {
 	to := os.Stdout
 
 	if fromFile != nil && *fromFile != "" {
-		from, err := os.Open(*fromFile)
+		from, err = os.Open(*fromFile)
 		if err != nil {
-			fatal("Could not open file %s: %s\n", *fromFile, err)
+			return fmt.Errorf("could not open file %s: %w", *fromFile, err)
 		}
 		defer from.Close()
 	}
@@ -67,31 +74,40 @@ func main() {
 	if toFile != nil && *toFile != "" {
 		to, err = os.Create(*toFile)
 		if err != nil {
-			fatal("Could not open file %s: %s\n", *toFile, err)
+			return fmt.Errorf("could not open file %s: %w", *toFile, err)
 		}
 		defer to.Close()
-
 	}
 
-	if err := convert(from, to, &ignore); err != nil {
-		fatal("code coverage conversion failed: %s", err)
+	var buildTags []string
+	if tags != nil && len(*tags) > 0 {
+		buildTags = strings.Split(strings.TrimSpace(*tags), ",")
 	}
+
+	if err = Convert(from, to, &ignore, buildTags...); err != nil {
+		return fmt.Errorf("code coverage conversion failed: %w", err)
+	}
+
+	return nil
 }
 
-func convert(in io.Reader, out io.Writer, ignore *Ignore) error {
+func Convert(in io.Reader, out io.Writer, ignore *Ignore, buildTags ...string) error {
 	profiles, err := ParseProfiles(in, ignore)
 	if err != nil {
 		return err
 	}
 
-	pkgs, err := getPackages(profiles)
+	pkgs, err := getPackages(profiles, buildTags)
 	if err != nil {
 		return err
 	}
 
-	sources := make([]*Source, 0)
-	pkgMap := make(map[string]*packages.Package)
+	sources := make([]*Source, 0, len(pkgs))
+	pkgMap := make(map[string]*packages.Package, len(pkgs))
 	for _, pkg := range pkgs {
+		if pkg == nil || pkg.Module == nil {
+			continue
+		}
 		sources = appendIfUnique(sources, pkg.Module.Dir)
 		pkgMap[pkg.ID] = pkg
 	}
@@ -102,7 +118,7 @@ func convert(in io.Reader, out io.Writer, ignore *Ignore) error {
 	}
 
 	_, _ = fmt.Fprint(out, xml.Header)
-	_, _ = fmt.Fprintln(out, coberturaDTDDecl)
+	_, _ = fmt.Fprintln(out, DTDDecl)
 
 	encoder := xml.NewEncoder(out)
 	encoder.Indent("", "  ")
@@ -114,16 +130,22 @@ func convert(in io.Reader, out io.Writer, ignore *Ignore) error {
 	return nil
 }
 
-func getPackages(profiles []*Profile) ([]*packages.Package, error) {
+func getPackages(profiles []*Profile, buildTags []string) ([]*packages.Package, error) {
 	if len(profiles) == 0 {
 		return []*packages.Package{}, nil
 	}
 
-	var pkgNames []string
-	for _, profile := range profiles {
-		pkgNames = append(pkgNames, getPackageName(profile.FileName))
+	pkgNames := make([]string, len(profiles))
+	for index := range profiles {
+		pkgNames[index] = getPackageName(profiles[index].FileName)
 	}
-	return packages.Load(&packages.Config{Mode: packages.NeedFiles | packages.NeedModule}, pkgNames...)
+	cfg := &packages.Config{
+		Mode: packages.NeedFiles | packages.NeedModule,
+	}
+	if len(buildTags) > 0 {
+		cfg.BuildFlags = []string{"-tags=" + strings.Join(buildTags, ",")}
+	}
+	return packages.Load(cfg, pkgNames...)
 }
 
 func appendIfUnique(sources []*Source, dir string) []*Source {
@@ -137,7 +159,7 @@ func appendIfUnique(sources []*Source, dir string) []*Source {
 
 func getPackageName(filename string) string {
 	pkgName, _ := filepath.Split(filename)
-	// TODO(boumenot): Windows vs. Linux
+	// NOTE: Windows vs. Linux
 	return strings.TrimRight(strings.TrimRight(pkgName, "\\"), "/")
 }
 
@@ -156,7 +178,7 @@ func (cov *Coverage) parseProfiles(profiles []*Profile, pkgMap map[string]*packa
 	for _, profile := range profiles {
 		pkgName := getPackageName(profile.FileName)
 		pkgPkg := pkgMap[pkgName]
-		if err := cov.parseProfile(profile, pkgPkg, ignore); err != nil {
+		if err := cov.ParseProfile(profile, pkgPkg, ignore); err != nil {
 			return err
 		}
 	}
@@ -166,7 +188,7 @@ func (cov *Coverage) parseProfiles(profiles []*Profile, pkgMap map[string]*packa
 	return nil
 }
 
-func (cov *Coverage) parseProfile(profile *Profile, pkgPkg *packages.Package, ignore *Ignore) error {
+func (cov *Coverage) ParseProfile(profile *Profile, pkgPkg *packages.Package, ignore *Ignore) error {
 	if pkgPkg == nil || pkgPkg.Module == nil {
 		return fmt.Errorf("package required when using go modules")
 	}
@@ -175,11 +197,11 @@ func (cov *Coverage) parseProfile(profile *Profile, pkgPkg *packages.Package, ig
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, absFilePath, nil, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("file path error: %s , %s, %w", pkgPkg, profile.FileName, err)
 	}
 	data, err := os.ReadFile(absFilePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("read file %s: %w", absFilePath, err)
 	}
 
 	if ignore.Match(fileName, data) {
@@ -189,19 +211,22 @@ func (cov *Coverage) parseProfile(profile *Profile, pkgPkg *packages.Package, ig
 	pkgPath, _ := filepath.Split(fileName)
 	pkgPath = strings.TrimRight(strings.TrimRight(pkgPath, "/"), "\\")
 	pkgPath = filepath.Join(pkgPkg.Module.Path, pkgPath)
-	// TODO(boumenot): package paths are not file paths, there is a consistent separator
-	pkgPath = strings.Replace(pkgPath, "\\", "/", -1)
+	// NOTE: package paths are not file paths, there is a consistent separator
+	pkgPath = strings.ReplaceAll(pkgPath, "\\", "/")
 
 	var pkg *Package
-	for _, p := range cov.Packages {
-		if p.Name == pkgPath {
-			pkg = p
+
+	for index := range cov.Packages {
+		if cov.Packages[index].Name == pkgPath {
+			pkg = cov.Packages[index]
 		}
 	}
+
 	if pkg == nil {
 		pkg = &Package{Name: pkgPkg.ID, Classes: []*Class{}}
 		cov.Packages = append(cov.Packages, pkg)
 	}
+
 	visitor := &fileVisitor{
 		fset:     fset,
 		fileName: fileName,
@@ -225,14 +250,12 @@ type fileVisitor struct {
 }
 
 func (v *fileVisitor) Visit(node ast.Node) ast.Visitor {
-	switch n := node.(type) {
-	case *ast.FuncDecl:
+	if n, ok := node.(*ast.FuncDecl); ok {
 		class := v.class(n)
 		method := v.method(n)
 		method.LineRate = method.Lines.HitRate()
 		class.Methods = append(class.Methods, method)
 		class.Lines = append(class.Lines, method.Lines...)
-
 		class.LineRate = class.Lines.HitRate()
 	}
 	return v
@@ -248,18 +271,21 @@ func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 	startCol := start.Column
 	endLine := end.Line
 	endCol := end.Column
+
 	// The blocks are sorted, so we can stop counting as soon as we reach the end of the relevant block.
-	for _, b := range v.profile.Blocks {
-		if b.StartLine > endLine || (b.StartLine == endLine && b.StartCol >= endCol) {
+	for _, block := range v.profile.Blocks {
+		if block.StartLine > endLine || (block.StartLine == endLine && block.StartCol >= endCol) {
 			// Past the end of the function.
 			break
 		}
-		if b.EndLine < startLine || (b.EndLine == startLine && b.EndCol <= startCol) {
+
+		if block.EndLine < startLine || (block.EndLine == startLine && block.EndCol <= startCol) {
 			// Before the beginning of the function
 			continue
 		}
-		for i := b.StartLine; i <= b.EndLine; i++ {
-			method.Lines.AddOrUpdateLine(i, int64(b.Count))
+
+		for i := block.StartLine; i <= block.EndLine; i++ {
+			method.Lines.AddOrUpdateLine(i, int64(block.Count))
 		}
 	}
 	return method
@@ -268,7 +294,7 @@ func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 func (v *fileVisitor) class(n *ast.FuncDecl) *Class {
 	var className string
 	if byFiles {
-		//className = filepath.Base(v.fileName)
+		// className = filepath.Base(v.fileName)
 		//
 		// NOTE(boumenot): ReportGenerator creates links that collide if names are not distinct.
 		// This could be an issue in how I am generating the report, but I have not been able
@@ -276,8 +302,8 @@ func (v *fileVisitor) class(n *ast.FuncDecl) *Class {
 		// the file path.
 		//
 		// src/lib/util/foo.go -> src.lib.util.foo.go
-		className = strings.Replace(v.fileName, "/", ".", -1)
-		className = strings.Replace(className, "\\", ".", -1)
+		className = strings.ReplaceAll(v.fileName, "/", ".")
+		className = strings.ReplaceAll(className, "\\", ".")
 	} else {
 		className = v.recvName(n)
 	}

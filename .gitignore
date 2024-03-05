@@ -1,4 +1,6 @@
 *~
 .idea
+.vscode
 gocover-cobertura
 gocover-cobertura.exe
+testdata/*.xml

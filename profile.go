@@ -1,4 +1,5 @@
-// Imported from https://code.google.com/p/go/source/browse/cmd/cover/profile.go?repo=tools&r=c10a9dd5e0b0a859a8385b6f004584cb083a3934
+// Imported from
+// https://code.google.com/p/go/source/browse/cmd/cover/profile.go?repo=tools&r=c10a9dd5e0b0a859a8385b6f004584cb083a3934
 
 // Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -37,89 +38,112 @@ func (p byFileName) Len() int           { return len(p) }
 func (p byFileName) Less(i, j int) bool { return p[i].FileName < p[j].FileName }
 func (p byFileName) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
-// ParseProfiles parses profile data from the given Reader and returns a
-// Profile for each file.
 func ParseProfiles(in io.Reader, ignore *Ignore) ([]*Profile, error) {
 	files := make(map[string]*Profile)
-	// First line is "mode: foo", where foo is "set", "count", or "atomic".
-	// Rest of file is in the format
-	//      encoding/base64/base64.go:34.44,37.40 3 1
-	// where the fields are: name.go:line.column,line.column numberOfStatements count
-	s := bufio.NewScanner(in)
+	scanner := bufio.NewScanner(in)
 	mode := ""
-	for s.Scan() {
-		line := s.Text()
-		if mode == "" {
-			const p = "mode: "
-			if !strings.HasPrefix(line, p) || line == p {
-				return nil, fmt.Errorf("bad mode line: %v", line)
-			}
-			mode = line[len(p):]
-			continue
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		err := parseLine(&mode, line, files, ignore)
+		if err != nil {
+			return nil, err
 		}
-		m := lineRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		fn := m[1]
-		if ignore.Match(fn, nil) {
-			continue
-		}
-		p := files[fn]
-		if p == nil {
-			p = &Profile{
-				FileName: fn,
-				Mode:     mode,
-			}
-			files[fn] = p
-		}
-		p.Blocks = append(p.Blocks, ProfileBlock{
-			StartLine: toInt(m[2]),
-			StartCol:  toInt(m[3]),
-			EndLine:   toInt(m[4]),
-			EndCol:    toInt(m[5]),
-			NumStmt:   toInt(m[6]),
-			Count:     toInt(m[7]),
-		})
 	}
-	if err := s.Err(); err != nil {
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan profiles: %w", err)
+	}
+
+	err := mergeSameLocationSamples(files, mode)
+	if err != nil {
 		return nil, err
 	}
 
-	for _, p := range files {
-		sort.Sort(blocksByStart(p.Blocks))
-		// Merge samples from the same location.
-		j := 1
-		for i := 1; i < len(p.Blocks); i++ {
-			b := p.Blocks[i]
-			last := p.Blocks[j-1]
-			if b.StartLine == last.StartLine &&
-				b.StartCol == last.StartCol &&
-				b.EndLine == last.EndLine &&
-				b.EndCol == last.EndCol {
-				if b.NumStmt != last.NumStmt {
-					return nil, fmt.Errorf("inconsistent NumStmt: changed from %d to %d", last.NumStmt, b.NumStmt)
-				}
-				if mode == "set" {
-					p.Blocks[j-1].Count |= b.Count
-				} else {
-					p.Blocks[j-1].Count += b.Count
-				}
-				continue
-			}
-			p.Blocks[j] = b
-			j++
+	profiles := generateSortedProfilesSlice(files)
+
+	return profiles, nil
+}
+
+func parseLine(mode *string, line string, files map[string]*Profile, ignore *Ignore) error {
+	if *mode == "" {
+		const prefix = "mode: "
+
+		if !strings.HasPrefix(line, prefix) || line == prefix {
+			return fmt.Errorf("bad mode line: %s", line)
 		}
-		p.Blocks = p.Blocks[:j]
+		*mode = line[len(prefix):]
+		return nil
+	}
+	match := lineRe.FindStringSubmatch(line)
+	if match == nil {
+		return nil
+	}
+	filename := match[1]
+	if ignore.Match(filename, nil) {
+		return nil
+	}
+	profile := files[filename]
+	if profile == nil {
+		profile = &Profile{
+			FileName: filename,
+			Mode:     *mode,
+		}
+		files[filename] = profile
 	}
 
-	// Generate a sorted slice.
+	profile.Blocks = append(profile.Blocks, ProfileBlock{
+		StartLine: toInt(match[2]),
+		StartCol:  toInt(match[3]),
+		EndLine:   toInt(match[4]),
+		EndCol:    toInt(match[5]),
+		NumStmt:   toInt(match[6]),
+		Count:     toInt(match[7]),
+	})
+
+	return nil
+}
+
+func mergeSameLocationSamples(files map[string]*Profile, mode string) error {
+	for _, profile := range files {
+		sort.Sort(blocksByStart(profile.Blocks))
+		blockNo := 1
+
+		for blockIndex := 1; blockIndex < len(profile.Blocks); blockIndex++ {
+			currentBlock := profile.Blocks[blockIndex]
+			last := profile.Blocks[blockNo-1]
+			if currentBlock.StartLine == last.StartLine &&
+				currentBlock.StartCol == last.StartCol &&
+				currentBlock.EndLine == last.EndLine &&
+				currentBlock.EndCol == last.EndCol {
+				if currentBlock.NumStmt != last.NumStmt {
+					return fmt.Errorf("inconsistent NumStmt: changed from %d to %d", last.NumStmt, currentBlock.NumStmt)
+				}
+				if mode == "set" {
+					profile.Blocks[blockNo-1].Count |= currentBlock.Count
+				} else {
+					profile.Blocks[blockNo-1].Count += currentBlock.Count
+				}
+
+				continue
+			}
+			profile.Blocks[blockNo] = currentBlock
+			blockNo++
+		}
+		profile.Blocks = profile.Blocks[:blockNo]
+	}
+	return nil
+}
+
+func generateSortedProfilesSlice(files map[string]*Profile) []*Profile {
 	profiles := make([]*Profile, 0, len(files))
+
 	for _, profile := range files {
 		profiles = append(profiles, profile)
 	}
+
 	sort.Sort(byFileName(profiles))
-	return profiles, nil
+	return profiles
 }
 
 type blocksByStart []ProfileBlock
@@ -143,7 +167,7 @@ func toInt(s string) int {
 
 // Boundary represents the position in a source file of the beginning or end of a
 // block as reported by the coverage profile. In HTML mode, it will correspond to
-// the opening or closing of a <span> tag and will be used to colorize the source
+// the opening or closing of a <span> tag and will be used to colorize the source.
 type Boundary struct {
 	Offset int     // Location as a byte offset in the source file.
 	Start  bool    // Is this the start of a block?
@@ -151,44 +175,50 @@ type Boundary struct {
 	Norm   float64 // Count normalized to [0..1].
 }
 
-// Boundaries returns a Profile as a set of Boundary objects within the provided src.
+func (p *Profile) getMaxCount() int {
+	maxCount := 0
+	for _, b := range p.Blocks {
+		if b.Count > maxCount {
+			maxCount = b.Count
+		}
+	}
+	return maxCount
+}
+
+func (p *Profile) normalize(count, maxCount int) float64 {
+	if maxCount <= 1 {
+		return 0.8 // Profile is in"set" mode; we want a heat map. Use cov8 in the CSS.
+	} else if count > 0 {
+		return math.Log(float64(count)) / math.Log(float64(maxCount))
+	}
+	return 0
+}
+
+func (p *Profile) createBoundary(offset int, start bool, count, maxCount int) Boundary {
+	boundary := Boundary{Offset: offset, Start: start, Count: count}
+	if !start || count == 0 {
+		return boundary
+	}
+	boundary.Norm = p.normalize(count, maxCount)
+	return boundary
+}
+
 func (p *Profile) Boundaries(src []byte) []Boundary {
 	var boundaries []Boundary
+	maxCount := p.getMaxCount()
 
-	// Find maximum count.
-	max := 0
-	for _, b := range p.Blocks {
-		if b.Count > max {
-			max = b.Count
-		}
-	}
-	// Divisor for normalization.
-	divisor := math.Log(float64(max))
+	line, col := 1, 1
 
-	// boundary returns a Boundary, populating the Norm field with a normalized Count.
-	boundary := func(offset int, start bool, count int) Boundary {
-		b := Boundary{Offset: offset, Start: start, Count: count}
-		if !start || count == 0 {
-			return b
-		}
-		if max <= 1 {
-			b.Norm = 0.8 // Profile is in"set" mode; we want a heat map. Use cov8 in the CSS.
-		} else if count > 0 {
-			b.Norm = math.Log(float64(count)) / divisor
-		}
-		return b
-	}
-
-	line, col := 1, 2 // TODO: Why is this 2?
 	for si, bi := 0, 0; si < len(src) && bi < len(p.Blocks); {
 		b := p.Blocks[bi]
 		if b.StartLine == line && b.StartCol == col {
-			boundaries = append(boundaries, boundary(si, true, b.Count))
+			boundaries = append(boundaries, p.createBoundary(si, true, b.Count, maxCount))
 		}
 		if b.EndLine == line && b.EndCol == col {
-			boundaries = append(boundaries, boundary(si, false, 0))
+			boundaries = append(boundaries, p.createBoundary(si, false, 0, maxCount))
 			bi++
-			continue // Don't advance through src; maybe the next block starts here.
+
+			continue
 		}
 		if src[si] == '\n' {
 			line++

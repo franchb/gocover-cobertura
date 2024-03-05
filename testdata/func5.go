@@ -1,4 +1,5 @@
-// +build testdata
+//go:build testdata
+
 package testdata
 
 // This file is not in testdata_set.txt

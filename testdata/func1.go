@@ -1,8 +1,15 @@
-// +build testdata
+//go:build testdata
+
 package testdata
 
-func Func1(arg1 *int) {
-	if *arg1 != 0 {
-		*arg1 = 1
+import (
+	"testing"
+)
+
+func TestFunc1(t *testing.T) {
+	val := 0
+	Func1(&val)
+	if val != 0 {
+		t.Fail()
 	}
 }
